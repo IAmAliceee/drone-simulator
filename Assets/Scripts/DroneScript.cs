@@ -3,7 +3,6 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using System.IO.Ports;
 using System.Threading;
-using JetBrains.Annotations;
 
 public class DroneScript : MonoBehaviour
 {
@@ -200,13 +199,22 @@ public class DroneScript : MonoBehaviour
     private void swapPerspective()
     {
         firstPersonEnabled = !firstPersonEnabled;
-        Camera.main.gameObject.transform.position = (firstPersonEnabled) ? cameraFP.position : cameraTP.position;
+        Camera.main.transform.position = (firstPersonEnabled) ? cameraFP.position : cameraTP.position;
     }
 
     private void arduinoUpdateControls()
     {
         if (!arduinoEnabled || incomingMsg == "") return;
         string[] inputs = incomingMsg.Split(","); // throttle, leftx, lefty, rightx
+        if(stabilizationEnabled)
+        {
+            movementInput.x = float.Parse(inputs[0]) / 256f;
+            pidPositionY = transform.position.y + pidScale * Mathf.Pow(float.Parse(inputs[1]) / 256f, 3);
+
+            lookInput = new(float.Parse(inputs[2]) / 256f, 0f);
+            movementInput.y = (float.Parse(inputs[3]) / 500f) - 1f;
+            return;
+        }
         throttleInput = float.Parse(inputs[3]) * .001f;
         moveInput = new Vector2(float.Parse(inputs[0]) / 256f, float.Parse(inputs[1]) / 256f);
         lookInput = new Vector2(float.Parse(inputs[2]) / 256f, 0f);
