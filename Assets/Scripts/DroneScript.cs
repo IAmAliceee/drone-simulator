@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using System.IO.Ports;
 using System.Threading;
+using JetBrains.Annotations;
 
 public class DroneScript : MonoBehaviour
 {
@@ -20,6 +21,7 @@ public class DroneScript : MonoBehaviour
 
     public Rigidbody rb;
     private InputSystem_Actions controls;
+    public GameObject optionsUI;
     public TMP_Text statusText;
     public AudioSource droneSound;
 
@@ -29,7 +31,7 @@ public class DroneScript : MonoBehaviour
     private float throttleInput;
     private Vector2 moveInput;
     private Vector2 lookInput;
-    public bool stabilizationEnabled = false;
+    private bool stabilizationEnabled = false;
     private bool firstPersonEnabled = true;
     private bool cameraRotationEnabled = false;
     private float battery;
@@ -37,7 +39,8 @@ public class DroneScript : MonoBehaviour
     private CircularBuffer throttleAverage;
 
     public float pidScale;
-    private Vector3 pidPosition;
+    private float pidPositionY;
+    private Vector2 movementInput;
 
     // Arduino
     public bool arduinoEnabled = false;
@@ -45,10 +48,12 @@ public class DroneScript : MonoBehaviour
     Thread IOThread = new(DataThread);
     private static SerialPort sp;
     private static string incomingMsg = "";
+    private static string arduinoPortName = "COM0";
+    private static int arduinoBaudRate = 0;
 
     private static void DataThread()
     {
-        sp = new SerialPort("COM11", 9600);
+        sp = new SerialPort(arduinoPortName, arduinoBaudRate);
         sp.Open();
 
         while (true)
@@ -61,10 +66,18 @@ public class DroneScript : MonoBehaviour
 
     private void Awake()
     {
+        stabilizationEnabled = Helper.GetPrefInt("stabilizationEnabled") != 0;
+        arduinoEnabled = Helper.GetPrefInt("arduinoEnabled") != 0;
+        arduinoPortName = "COM" + Helper.GetPrefInt("arduinoPortName");
+        arduinoBaudRate = Helper.GetPrefInt("arduinoBaudRate");
+
+
         controls = new();
         controls.Drone.Restart.performed += _ => SceneManager.LoadScene(0);
         controls.Drone.ThirdPerson.performed += _ => swapPerspective();
         controls.Drone.LockCamera.performed += _ => cameraRotationEnabled = !cameraRotationEnabled;
+
+        controls.Player.Options.performed += ctx => optionsUI.SetActive(true);
 
         if (arduinoEnabled) return;
 
@@ -73,14 +86,15 @@ public class DroneScript : MonoBehaviour
             controls.DroneS.Look.performed += ctx =>
             {
                 Vector2 v = ctx.ReadValue<Vector2>();
-                pidPosition.y += pidScale * v.y;
-                lookInput = new(v.x, 0f);
+                movementInput.x = v.x;
+                pidPositionY = transform.position.y + pidScale * v.y * v.y * v.y;
             };
             controls.DroneS.Move.performed += ctx =>
             {
                 Vector2 v = ctx.ReadValue<Vector2>();
-                pidPosition.x += pidScale * v.x;
-                pidPosition.z += pidScale * v.y;
+
+                movementInput.y = v.y;
+                lookInput = new(v.x, 0f);
             };
             return;
         }
@@ -101,7 +115,6 @@ public class DroneScript : MonoBehaviour
         battery = batteryMax;
         if (!droneSound.isPlaying) droneSound.Play();
         if (arduinoEnabled) IOThread.Start();
-        pidPosition = transform.position;
         throttleAverage = new();
     }
 
@@ -156,7 +169,7 @@ public class DroneScript : MonoBehaviour
         rb.AddForceAtPosition(transform.up * fr, propFR.position);
         rb.AddForceAtPosition(transform.up * rl, propRL.position);
         rb.AddForceAtPosition(transform.up * rr, propRR.position);
-
+            
         rb.AddTorque(transform.up * lookInput.x * yawFactor);
 
         if(cameraRotationEnabled)
@@ -173,6 +186,7 @@ public class DroneScript : MonoBehaviour
     {
         arduinoUpdateControls();
 
+        /*
         statusText.text = string.Format(
             "Battery: {0}%\nThrottle: {1}%",
             Mathf.RoundToInt(battery / batteryMax * 100f).ToString(),
@@ -180,6 +194,7 @@ public class DroneScript : MonoBehaviour
             );
 
         battery -= Time.deltaTime * .04f * Mathf.Pow(throttleInput, 2) * throttleInput * maxThrust;
+        */
     }
 
     private void swapPerspective()
@@ -200,14 +215,35 @@ public class DroneScript : MonoBehaviour
     PIDController pidX = new(.5f, 0, .3f);
     PIDController pidY = new(1, 1, 1);
     PIDController pidZ = new(.5f, 0, .3f);
+    PIDController pidPitch = new(4, 0, 1);
+    PIDController pidRoll = new(4, 0, 1);
+    private const float maxAngle = 50f;
+    private const float Kp_roll_pitch = 2f;
 
     private void stabilizeDrone()
     {
         Vector3 pos = transform.position;
 
-        float maxAngle = Mathf.Deg2Rad * 10f;
-        throttleInput = Mathf.Clamp(pidY.UpdatePID(pidPosition.y, pos.y, Time.fixedDeltaTime), 0f, 1f);
+        throttleInput = Mathf.Clamp(pidY.UpdatePID(pidPositionY, pos.y, Time.fixedDeltaTime), 0f, 1f);
 
-        
+        float pitch = normalizeAngle(transform.rotation.eulerAngles.x);
+        float roll = normalizeAngle(transform.rotation.eulerAngles.z);
+
+        float desired_pitch = movementInput.y * maxAngle;
+        float pitch_error = desired_pitch - pitch;
+
+        float pitch_input = Mathf.Clamp(Kp_roll_pitch * pitch_error, -1f, 1f);
+        moveInput.y = pitch_input;
+
+        float desired_roll = -movementInput.x * maxAngle;
+        float roll_error = desired_roll - roll;
+
+        float roll_input = Mathf.Clamp(Kp_roll_pitch * roll_error, -1f, 1f);
+        moveInput.x = -roll_input;
+    }
+
+    private float normalizeAngle(float angle)
+    {
+        return (angle > 180f) ? angle - 360f : angle;
     }
 }

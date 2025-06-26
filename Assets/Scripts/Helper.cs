@@ -8,4 +8,9 @@ public class Helper : MonoBehaviour
         Application.targetFrameRate = -1;
     }
 
+    public static int GetPrefInt(string key)
+    {
+        if (!PlayerPrefs.HasKey(key)) return 0;
+        return PlayerPrefs.GetInt(key);
+    }
 }
